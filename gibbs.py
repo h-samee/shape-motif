@@ -25,7 +25,7 @@ def gibbs_motif_finder(shape_data, window_size):
 	##parameters specific to this function
 	max_consecutive_iters_wo_improvement = 10
 	n_consecutive_iters_wo_improvement = 0
-	epsilon_factor_improvement = 1e-5
+	epsilon_factor_improvement = 1e-4
 
 	##generate initial window locations
 	window_locs = []
@@ -60,7 +60,7 @@ def gibbs_motif_finder(shape_data, window_size):
 				cur_all_pair_distance += distance(window_i, window_j)
 		
 		#update and continue, or break and terminate
-		if not (cur_all_pair_distance < all_pair_distance):
+		if cur_all_pair_distance > all_pair_distance:
 			break
 		elif cur_all_pair_distance > all_pair_distance * (1 - epsilon_factor_improvement):
 			all_pair_distance = cur_all_pair_distance
@@ -261,7 +261,6 @@ def main(argv = None):
 				lst = chip_occurrences[i]
 				[chromosome, start_coord, end_coord] = chip_bed_lines[i]
 				for j in lst:
-					cur_window = chip_shape_data[i][j : j + window_size]
 					for k in range(window_size):
 						motif_shape_file.write("%f " % (chip_shape_data[i][j + k]))
 					motif_shape_file.write("\n")
@@ -270,28 +269,6 @@ def main(argv = None):
 					motif_end_coord = motif_start_coord + window_size
 					motif_bed_file.write("%s\t%d\t%d\n" % (chromosome, motif_start_coord, motif_end_coord))
 
-			###################################################################################################		
-			##shapes at motif occurrences
-			#NOTE: this list may not contain a window from every sequence 
-			motif_shape_file.write("#%d;%f\n" % (iter_count + 1, sigma_count))
-			for i in range(n_chip_seq):
-				cur_window = chip_shape_data[i][motif_window_locs[i] : motif_window_locs[i] + window_size]
-				if does_motif_match_window(motif_as_range, cur_window):
-					for j in range(window_size):
-						motif_shape_file.write("%f " % (chip_shape_data[i][motif_window_locs[i] + j]))
-					motif_shape_file.write("\n")
-
-			#bed coordiates at motif occurrences
-			#NOTE: this list may not contain a line for every sequence 
-			motif_bed_file.write("#%d;%f\n" % (iter_count + 1, sigma_count))
-			for i in range(n_chip_seq):
-				cur_window = chip_shape_data[i][motif_window_locs[i] : motif_window_locs[i] + window_size]
-				if does_motif_match_window(motif_as_range, cur_window):
-					[chromosome, start_coord, end_coord] = chip_bed_lines[i]
-					motif_start_coord = start_coord + motif_window_locs[i]
-					motif_end_coord = motif_start_coord + window_size
-					motif_bed_file.write("%s\t%d\t%d\n" % (chromosome, motif_start_coord, motif_end_coord))
-	
 	##close output files
 	summary_file.close()
 	motif_bed_file.close()
