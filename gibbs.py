@@ -124,12 +124,12 @@ def list_motif_occurrences(cur_shape_data, motif_as_range):
 	return occurrence_list
 
 def count_occurrences(motif_as_range, shape_data):
-"""
-Note: 
--- This function returns:
----- number of sequences that contain the motif and
----- locations of the motif's occurrences (overlapping occurrences allowed) in each sequence (as a dictionary)
-"""
+	"""
+	Note: 
+	-- This function returns:
+	---- number of sequences that contain the motif and
+	---- locations of the motif's occurrences (overlapping occurrences allowed) in each sequence (as a dictionary)
+	"""
 	n_seq = len(shape_data)
 	seq_len = len(shape_data[0])
 	window_size = len(motif_as_range)
