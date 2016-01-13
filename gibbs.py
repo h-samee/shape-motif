@@ -208,13 +208,16 @@ def main(argv = None):
 	##set output files
 	file_name_prefix = os.path.split(chip_data_file_name)[1].split('.')[0]
 	#output file names	
+	motif_instance_file_name = output_dir + "/" + file_name_prefix + ".instance"
 	summary_file_name = output_dir + "/" + file_name_prefix + ".summary"
 	motif_shape_file_name = output_dir + "/" + file_name_prefix + ".shape"
 	motif_bed_file_name = output_dir + "/" + file_name_prefix + ".bed"
 	#open output files
-	summary_file = open(summary_file_name, "w")
-	motif_shape_file = open(motif_shape_file_name, "w")
-	motif_bed_file = open(motif_bed_file_name, "w")
+	bufsize = 1 #Note: 0 means unbuffered, 1 means line buffered
+	motif_instance_file = open(motif_instance_file_name, "w", bufsize)
+	summary_file = open(summary_file_name, "w", bufsize)
+	motif_shape_file = open(motif_shape_file_name, "w", bufsize)
+	motif_bed_file = open(motif_bed_file_name, "w", bufsize)
 	
 	##initiate the random number generator based on the name of the output directory.
 	##the output directory name contains cell type, TF name, shape feature, and length.
@@ -224,6 +227,12 @@ def main(argv = None):
 		##compute motif
 		motif_window_locs = gibbs_motif_finder(chip_shape_data, window_size)
 		
+		##output motif instances
+		for i in range(n_chip_seq):
+			for j in range(window_size):
+				motif_instance_file.write("%f " % (chip_shape_data[i][motif_window_locs[i] + j]))
+			motif_instance_file.write("\n")
+
 		for sigma_count in [0.5, 1, 1.5, 2]:
 			##compute statistical significance
 			motif_as_range = compute_ranges(chip_shape_data, motif_window_locs, window_size, sigma_count)
