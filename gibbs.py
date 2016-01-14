@@ -25,6 +25,7 @@ def gibbs_motif_finder(shape_data, window_size):
 	##parameters specific to this function
 	max_consecutive_iters_wo_improvement = 10
 	n_consecutive_iters_wo_improvement = 0
+
 	epsilon_factor_improvement = 1e-5
 
 	##generate initial window locations
