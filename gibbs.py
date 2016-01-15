@@ -229,6 +229,7 @@ def main(argv = None):
 		motif_window_locs = gibbs_motif_finder(chip_shape_data, window_size)
 		
 		##output motif instances
+		motif_instance_file.write("#%d\n" % (iter_count + 1))
 		for i in range(n_chip_seq):
 			for j in range(window_size):
 				motif_instance_file.write("%f " % (chip_shape_data[i][motif_window_locs[i] + j]))
