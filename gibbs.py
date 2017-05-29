@@ -7,7 +7,7 @@ import random
 import numpy as np
 import math
 from scipy import stats
-
+from scipy.stats import rv_discrete
 
 def distance(x, y):
 	sq_sum = 0
@@ -19,39 +19,93 @@ def distance(x, y):
 	
 	return sq_sum
 
-def gibbs_motif_finder(shape_data, window_size):
+def gibbs_motif_extension_finder(shape_data, motif_len, seed_motif, extent):
+	
 	n_seq = len(shape_data)
 	seq_len = len(shape_data[0])
+	window_size = motif_len + extent
+
 	##parameters specific to this function
 	max_consecutive_iters_wo_improvement = 10
 	n_consecutive_iters_wo_improvement = 0
 
 	epsilon_factor_improvement = 1e-5
 
+	##compute the range of locations within which an extended motif will be searched
+	start_locs = [0] * n_seq
+	end_locs = [seq_len - window_size] * n_seq
+	
+	##if seed has been specified for every sequence, then update the start_locs and end_locs
+	if len(seed_motif) == n_seq: 
+		for i in range(n_seq):
+			if seed_motif[i] - window_size < 0:
+				start_locs[i] = 0
+			else:
+				start_locs[i] = seed_motif[i] - window_size
+			
+			if seed_motif[i] + 2 * window_size >= seq_len:
+				end_locs[i] = seq_len - window_size
+			else:
+				end_locs[i] = seed_motif[i] + window_size
+	
 	##generate initial window locations
 	window_locs = []
 	for i in range(n_seq):
-		window_locs.append(random.randint(0, seq_len - window_size))
-		#random.randint(a, b): returns a random integer N, s.t.: a <= N <= b
+		window_locs.append(random.randint(start_locs[i], end_locs[i]))
+		#note: random.randint(a, b): returns a random integer N, s.t.: a <= N <= b
 	
 	all_pair_distance = float("inf")
 
 	while True:
 		cur_window_locs = window_locs[:]
-		#find the current best candidate for each sequence
+
+		#sample one candidate for each sequence
 		for i in range(n_seq):
 			cur_shape_data = shape_data[i]
-			cur_best_distance = float("inf")
-			for j in range(seq_len - window_size + 1):
+			
+			#we will maintain two parallel tables, for candidate index and for the score
+			#initially, the score is not exponentiated; it is simply the negative of the sum of pairwise distances
+			candidate_table = []
+			score_table = []
+			
+			for j in range(start_locs[i], end_locs[i] + 1):
 				cur_window = cur_shape_data[j : j + window_size]
 				cur_distance = 0
 				for k in range(n_seq):
 					if k != i:
 						solution_window = shape_data[k][cur_window_locs[k] : cur_window_locs[k] + window_size]
 						cur_distance += distance(cur_window, solution_window)
-				if cur_distance < cur_best_distance:
-					cur_best_distance = cur_distance
-					cur_window_locs[i] = j
+				candidate_table.append(j)
+				score_table.append(-cur_distance)
+			
+			#now we find the best score, i.e., max_score = max in the score_table
+			#and subtract max_score from each candidate's score
+			#after subtraction, we exponentiate each score
+			#these steps ensure that we do not run into numerical issues due division by zero
+			#for example, say we have two windows and -error1 > -error2 (error1 < error2)
+			#if both error1 & error2 are large, then both exp(-error1) and exp(-error2) = zero
+			#and we run into numerical issues
+			#under this scheme:
+			#exp(-error1)/(exp(-error1) + exp(-error2))
+			#=exp(0)/(exp(0) + exp(-error2 + error1))
+			#=1/(1 + 0)
+			#
+			max_score = np.max(score_table)
+
+			for score_index in range(len(score_table)):
+				score_table[score_index] -= max_score
+				score_table[score_index] = math.exp(score_table[score_index])
+			
+			score_sum = 0	
+			for score_index in range(len(score_table)):
+				score_sum += score_table[score_index]
+			
+			#normalize score_table to compute a probability distribution
+			for score_index in range(len(score_table)):
+				score_table[score_index] /= score_sum
+			#sample
+			sample = rv_discrete(values = (candidate_table, score_table)).rvs(size = 1)
+			cur_window_locs[i] = sample
 		#compute the current all-pair-distance -- how coherent/homogeneous are the shape features
 		cur_all_pair_distance = 0
 		for i in range(n_seq):
@@ -61,20 +115,31 @@ def gibbs_motif_finder(shape_data, window_size):
 				cur_all_pair_distance += distance(window_i, window_j)
 		
 		#update and continue, or break and terminate
-		if cur_all_pair_distance > all_pair_distance:
-			break
-		elif cur_all_pair_distance > all_pair_distance * (1 - epsilon_factor_improvement):
+
+		#if: no change in two successive iterations:
+		if not (cur_all_pair_distance != all_pair_distance):
+			window_locs = cur_window_locs[:]
+			break	
+		
+		#elif: we can assume that we have converged due to negligible changes in several successive iterations
+		elif (not (cur_all_pair_distance > all_pair_distance)) and (cur_all_pair_distance > all_pair_distance * (1 - epsilon_factor_improvement)):
 			all_pair_distance = cur_all_pair_distance
 			window_locs = cur_window_locs[:]
 			n_consecutive_iters_wo_improvement += 1
 			if n_consecutive_iters_wo_improvement == max_consecutive_iters_wo_improvement:
 				break
+		
+		#else: our increase/decrease is too large to assume that we have converged
 		else:
 			all_pair_distance = cur_all_pair_distance
 			window_locs = cur_window_locs[:]
 			n_consecutive_iters_wo_improvement = 0
 
 	return window_locs
+
+def gibbs_motif_finder(shape_data, window_size):
+	return gibbs_motif_extension_finder(shape_data, window_size, [], 0)
+
 
 def compute_ranges(shape_data, motif_window_locs, window_size, sigma_count):
 	n_seq = len(shape_data)
@@ -153,16 +218,16 @@ def read_shape_data(file_name):
 	with open(file_name) as f:
 		for line in f:
 			vals = line.split()
-			if len(vals) != 8:
-				print('Possible error: some fields missing in data file integrating .bw and Leslie data')
+			if len(vals) != 5:
+				print('Possible error in the .dat file of shape profile: some fields missing in data file integrating .bw and bed file')
 			else:
 				chromosome = vals[0]
 				start_coord = int(vals[1])
 				end_coord = int(vals[2])
 				bed_lines.append([chromosome, start_coord, end_coord])
 
-				data_len = int(vals[6])
-				data_vals = map(float, vals[7].split(','))
+				data_len = int(vals[-2])
+				data_vals = map(float, vals[-1].split(','))
 				if len(data_vals) != data_len:
 					print('Error: mismatch in bwtool generated data and data-len')
 				else:
@@ -210,15 +275,9 @@ def main(argv = None):
 	file_name_prefix = os.path.split(chip_data_file_name)[1].split('.')[0]
 	#output file names	
 	motif_instance_file_name = output_dir + "/" + file_name_prefix + ".instance"
-	summary_file_name = output_dir + "/" + file_name_prefix + ".summary"
-	motif_shape_file_name = output_dir + "/" + file_name_prefix + ".shape"
-	motif_bed_file_name = output_dir + "/" + file_name_prefix + ".bed"
 	#open output files
 	bufsize = 1 #Note: 0 means unbuffered, 1 means line buffered
 	motif_instance_file = open(motif_instance_file_name, "w", bufsize)
-	summary_file = open(summary_file_name, "w", bufsize)
-	motif_shape_file = open(motif_shape_file_name, "w", bufsize)
-	motif_bed_file = open(motif_bed_file_name, "w", bufsize)
 	
 	##initiate the random number generator based on the name of the output directory.
 	##the output directory name contains cell type, TF name, shape feature, and length.
@@ -228,62 +287,28 @@ def main(argv = None):
 		##compute motif
 		motif_window_locs = gibbs_motif_finder(chip_shape_data, window_size)
 		
-		##output motif instances
-		motif_instance_file.write("#%d\n" % (iter_count + 1))
-		for i in range(n_chip_seq):
-			for j in range(window_size):
-				motif_instance_file.write("%f " % (chip_shape_data[i][motif_window_locs[i] + j]))
-			motif_instance_file.write("\n")
-
-		for sigma_count in [0.5, 1, 1.5, 2]:
-			##compute statistical significance
-			motif_as_range = compute_ranges(chip_shape_data, motif_window_locs, window_size, sigma_count)
-
-			#significance for training set
-			n_chip_seq_with_shape, chip_occurrences = count_occurrences(motif_as_range, chip_shape_data)
-			n_ctrl_seq_with_shape, ctrl_occurrences = count_occurrences(motif_as_range, ctrl_shape_data)
-
-			total_seq = n_chip_seq + n_ctrl_seq
-			n_seq_with_shape = n_chip_seq_with_shape + n_ctrl_seq_with_shape
-			neg_log_p_val = -math.log10(stats.hypergeom.sf(n_chip_seq_with_shape - 1, total_seq, n_chip_seq, n_seq_with_shape))
-			
-			#significance for test set
-			n_test_chip_seq_with_shape, test_chip_occurrences = count_occurrences(motif_as_range, test_chip_shape_data)
-			n_test_ctrl_seq_with_shape, test_ctrl_occurrences = count_occurrences(motif_as_range, test_ctrl_shape_data)
-
-			total_test_seq = n_test_chip_seq + n_test_ctrl_seq
-			n_test_seq_with_shape = n_test_chip_seq_with_shape + n_test_ctrl_seq_with_shape
-			neg_log_p_val_test = -math.log10(stats.hypergeom.sf(n_test_chip_seq_with_shape - 1, total_test_seq, n_test_chip_seq, n_test_seq_with_shape))
-
-			##generate outputs
-			#summary: p-values
-			summary_file.write("motif:%d;sigma:%f;neg_log_p_val:%f;n_chip_w_shp:%d;n_ctrl_w_shp:%d" %\
-			 (iter_count + 1, sigma_count, neg_log_p_val, n_chip_seq_with_shape, n_ctrl_seq_with_shape))
-
-			summary_file.write(";neg_log_p_val_test:%f;n_test_chip_w_shp:%d;n_test_ctrl_w_shp:%d\n" %\
-			 (neg_log_p_val_test, n_test_chip_seq_with_shape, n_test_ctrl_seq_with_shape))
-
-			##shapes at and bed coordinates of motif occurrences
-			#NOTE: this list may not contain a window from every sequence 
-			motif_shape_file.write("#%d;%f\n" % (iter_count + 1, sigma_count))
-			motif_bed_file.write("#%d;%f\n" % (iter_count + 1, sigma_count))
-
+		extended_motif_window_locs = [motif_window_locs] 
+		for extent in range(0,5):
+			motif_window_locs = gibbs_motif_extension_finder(chip_shape_data, window_size, extended_motif_window_locs[0], extent)
+			extended_motif_window_locs.append(motif_window_locs)
+		#extended_motif_window_locs here contains 6 lists:
+		#first one is the original motif
+		#second one is the shifted version of the original motif
+		#the last 4 are the extended versions of the original motif
+		len_offsets = [0, 0, 1, 2, 3, 4]		
+		for motif_window_locs in extended_motif_window_locs:
+			cur_motif_len = window_size + len_offsets.pop(0)
+			##output motif instances
+			motif_instance_file.write("#%d,%d\n" % (iter_count + 1, cur_motif_len))
 			for i in range(n_chip_seq):
-				lst = chip_occurrences[i]
-				[chromosome, start_coord, end_coord] = chip_bed_lines[i]
-				for j in lst:
-					for k in range(window_size):
-						motif_shape_file.write("%f " % (chip_shape_data[i][j + k]))
-					motif_shape_file.write("\n")
+				for j in range(cur_motif_len):
+					motif_instance_file.write("%f " % (chip_shape_data[i][motif_window_locs[i] + j]))
+				motif_instance_file.write("\n")
 
-					motif_start_coord = start_coord + j
-					motif_end_coord = motif_start_coord + window_size
-					motif_bed_file.write("%s\t%d\t%d\n" % (chromosome, motif_start_coord, motif_end_coord))
 
+			
 	##close output files
-	summary_file.close()
-	motif_bed_file.close()
-	motif_shape_file.close()
+	motif_instance_file.close()
 	return 0
 
 if __name__ == "__main__":
