@@ -19,6 +19,26 @@ def distance(x, y):
 	
 	return sq_sum
 
+def distances(x, y):
+	'''
+	this function assumes:
+	x is the window from the current sequence
+	and y is the window from the current pool
+	the function will return:
+	distances between x and y
+	and between _x (= the reverse of x) and y
+	'''
+	d = 0
+	_d = 0
+	_x = x[::-1]
+	for i, x_val in enumerate(x):
+		_x_val = _x[i]
+		y_val = y[i]
+		_d += (_x_val - y_val) * (_x_val - y_val)
+		d += (x_val - y_val) * (x_val - y_val)
+
+	return (_d, d)
+
 def gibbs_motif_extension_finder(shape_data, motif_len, seed_motif, extent):
 	
 	n_seq = len(shape_data)
@@ -50,14 +70,18 @@ def gibbs_motif_extension_finder(shape_data, motif_len, seed_motif, extent):
 	
 	##generate initial window locations
 	window_locs = []
+	window_strands = []
 	for i in range(n_seq):
 		window_locs.append(random.randint(start_locs[i], end_locs[i]))
 		#note: random.randint(a, b): returns a random integer N, s.t.: a <= N <= b
+		window_strands.append(1)
+		#note: we assume 1 = +ve strand, 0 = -ve strand
 	
 	all_pair_distance = float("inf")
 
 	while True:
 		cur_window_locs = window_locs[:]
+		cur_window_strands = window_strands[:]
 
 		#sample one candidate for each sequence
 		for i in range(n_seq):
@@ -70,13 +94,23 @@ def gibbs_motif_extension_finder(shape_data, motif_len, seed_motif, extent):
 			
 			for j in range(start_locs[i], end_locs[i] + 1):
 				cur_window = cur_shape_data[j : j + window_size]
-				cur_distance = 0
+				cur_distance_1 = 0
+				cur_distance_0 = 0
 				for k in range(n_seq):
 					if k != i:
 						solution_window = shape_data[k][cur_window_locs[k] : cur_window_locs[k] + window_size]
-						cur_distance += distance(cur_window, solution_window)
-				candidate_table.append(j)
-				score_table.append(-cur_distance)
+						if cur_window_strands[k] == 1:
+							cur_distances = distances(cur_window, solution_window)
+						else:
+							cur_distances = distances(cur_window, solution_window[::-1])
+						cur_distance_0 += cur_distances[0]
+						cur_distance_1 += cur_distances[1]
+						
+				candidate_table.append((j, 1))
+				score_table.append(-cur_distance_1)
+				candidate_table.append((j, 0))
+				score_table.append(-cur_distance_0)
+				
 			
 			#now we find the best score, i.e., max_score = max in the score_table
 			#and subtract max_score from each candidate's score
@@ -96,22 +130,29 @@ def gibbs_motif_extension_finder(shape_data, motif_len, seed_motif, extent):
 				score_table[score_index] -= max_score
 				score_table[score_index] = math.exp(score_table[score_index])
 			
-			score_sum = 0	
-			for score_index in range(len(score_table)):
-				score_sum += score_table[score_index]
+			score_sum = sum(score_table)
+			#score_sum = 0	
+			#for score_index in range(len(score_table)):
+			#	score_sum += score_table[score_index]
 			
 			#normalize score_table to compute a probability distribution
 			for score_index in range(len(score_table)):
 				score_table[score_index] /= score_sum
 			#sample
-			sample = rv_discrete(values = (candidate_table, score_table)).rvs(size = 1)
-			cur_window_locs[i] = sample
+			[sample_index] = rv_discrete(values = (range(len(candidate_table)), score_table)).rvs(size = 1)
+			cur_window_locs[i] = candidate_table[sample_index][0]
+			cur_window_strands[i] = candidate_table[sample_index][1]
+	
 		#compute the current all-pair-distance -- how coherent/homogeneous are the shape features
 		cur_all_pair_distance = 0
 		for i in range(n_seq):
 			for j in range(i + 1, n_seq):
 				window_i = shape_data[i][cur_window_locs[i] : cur_window_locs[i] + window_size]
+				if cur_window_strands[i] == 0:
+					window_i = window_i[::-1]
 				window_j = shape_data[j][cur_window_locs[j] : cur_window_locs[j] + window_size]
+				if cur_window_strands[j] == 0:
+					window_j = window_j[::-1]
 				cur_all_pair_distance += distance(window_i, window_j)
 		
 		#update and continue, or break and terminate
@@ -119,12 +160,14 @@ def gibbs_motif_extension_finder(shape_data, motif_len, seed_motif, extent):
 		#if: no change in two successive iterations:
 		if not (cur_all_pair_distance != all_pair_distance):
 			window_locs = cur_window_locs[:]
+			window_strands = cur_window_strands[:]
 			break	
 		
 		#elif: we can assume that we have converged due to negligible changes in several successive iterations
 		elif (not (cur_all_pair_distance > all_pair_distance)) and (cur_all_pair_distance > all_pair_distance * (1 - epsilon_factor_improvement)):
 			all_pair_distance = cur_all_pair_distance
 			window_locs = cur_window_locs[:]
+			window_strands = cur_window_strands[:]
 			n_consecutive_iters_wo_improvement += 1
 			if n_consecutive_iters_wo_improvement == max_consecutive_iters_wo_improvement:
 				break
@@ -133,9 +176,10 @@ def gibbs_motif_extension_finder(shape_data, motif_len, seed_motif, extent):
 		else:
 			all_pair_distance = cur_all_pair_distance
 			window_locs = cur_window_locs[:]
+			window_strands = cur_window_strands[:]
 			n_consecutive_iters_wo_improvement = 0
 
-	return window_locs
+	return window_locs, window_strands
 
 def gibbs_motif_finder(shape_data, window_size):
 	return gibbs_motif_extension_finder(shape_data, window_size, [], 0)
@@ -212,9 +256,10 @@ def count_occurrences(motif_as_range, shape_data):
 
 	return occurrence_count, occurrence_dict
 
-def read_shape_data(file_name):
+def read_shape_data(file_name, max_lines):
 	bed_lines = []
 	shape_data = []
+	data_size = 0
 	with open(file_name) as f:
 		for line in f:
 			vals = line.split()
@@ -232,17 +277,10 @@ def read_shape_data(file_name):
 					print('Error: mismatch in bwtool generated data and data-len')
 				else:
 					shape_data.append(data_vals)
+				data_size += 1
+				if data_size == max_lines:
+					break
 	return shape_data, bed_lines
-"""
-Notes:
--- This version takes inputs for the Arvey et al. paper (Leslie Lab).
----- Training (chip and ctrl peaks) and test (training and ctrl peaks)
----- window size
----- Number of motifs to find
----- output directory
--- We assume there is no header line in the shape data or in the bed files
--- in the function count_occurrences, we allow overlapping occurrences
-"""
 
 def main(argv = None):
 	if argv is None:
@@ -250,26 +288,15 @@ def main(argv = None):
 	
 	##input args
 	chip_data_file_name = argv[1] 
-	ctrl_data_file_name = argv[2] 
+	max_chip_data_size = int(argv[2])
 	window_size = int(argv[3]) #length of motif
 	max_iter = int(argv[4]) #max number of motifs	
-	test_chip_data_file_name = argv[5]
-	test_ctrl_data_file_name = argv[6]
-	output_dir = argv[7]
+	output_dir = argv[5]
 
 	##read shape data and bed file
 	#chip peaks (train)
-	chip_shape_data, chip_bed_lines = read_shape_data(chip_data_file_name)
+	chip_shape_data, chip_bed_lines = read_shape_data(chip_data_file_name, max_chip_data_size)
 	n_chip_seq = len(chip_shape_data)
-	#control peaks (train)
-	ctrl_shape_data, ctrl_bed_lines = read_shape_data(ctrl_data_file_name)
-	n_ctrl_seq = len(ctrl_shape_data)
-	#chip peaks (test)
-	test_chip_shape_data, test_chip_bed_lines = read_shape_data(test_chip_data_file_name)
-	n_test_chip_seq = len(test_chip_shape_data)
-	#control peaks (train)
-	test_ctrl_shape_data, test_ctrl_bed_lines = read_shape_data(test_ctrl_data_file_name)
-	n_test_ctrl_seq = len(test_ctrl_shape_data)
 
 	##set output files
 	file_name_prefix = os.path.split(chip_data_file_name)[1].split('.')[0]
@@ -285,28 +312,35 @@ def main(argv = None):
 
 	for iter_count in range(max_iter):
 		##compute motif
-		motif_window_locs = gibbs_motif_finder(chip_shape_data, window_size)
+		motif_window_locs, motif_window_strands = gibbs_motif_finder(chip_shape_data, window_size)
 		
-		extended_motif_window_locs = [motif_window_locs] 
+		extended_motif_window_locs = [motif_window_locs]
+		extended_motif_window_strands = [motif_window_strands]
+
 		for extent in range(0,5):
-			motif_window_locs = gibbs_motif_extension_finder(chip_shape_data, window_size, extended_motif_window_locs[0], extent)
+			motif_window_locs, motif_window_strands = gibbs_motif_extension_finder(chip_shape_data, window_size, extended_motif_window_locs[0], extent)
 			extended_motif_window_locs.append(motif_window_locs)
+			extended_motif_window_strands.append(motif_window_strands)
 		#extended_motif_window_locs here contains 6 lists:
 		#first one is the original motif
 		#second one is the shifted version of the original motif
 		#the last 4 are the extended versions of the original motif
 		len_offsets = [0, 0, 1, 2, 3, 4]		
-		for motif_window_locs in extended_motif_window_locs:
+		for motif_index in range(len(extended_motif_window_locs)):
+			motif_window_locs = extended_motif_window_locs[motif_index]
+			motif_window_strands = extended_motif_window_strands[motif_index]
 			cur_motif_len = window_size + len_offsets.pop(0)
 			##output motif instances
 			motif_instance_file.write("#%d,%d\n" % (iter_count + 1, cur_motif_len))
 			for i in range(n_chip_seq):
+				cur_output_data = chip_shape_data[i][motif_window_locs[i] : motif_window_locs[i] + cur_motif_len]
+				if motif_window_strands[i] == 0:
+					cur_output_data_ = cur_output_data[::-1]
+					cur_output_data = cur_output_data_
 				for j in range(cur_motif_len):
-					motif_instance_file.write("%f " % (chip_shape_data[i][motif_window_locs[i] + j]))
+					motif_instance_file.write("%f " % (cur_output_data[j]))
 				motif_instance_file.write("\n")
-
-
-			
+	
 	##close output files
 	motif_instance_file.close()
 	return 0
